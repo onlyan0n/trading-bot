@@ -1,10 +1,13 @@
 version: '3.8'
+
 services:
   trading-bot:
     build: .
-    container_name: bybit-telegram-bot
-    restart: always
     env_file:
-      - .env
-    volumes:
-      - ./last_state.json:/app/last_state.json
+      - config.env
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
