@@ -1,11 +1,3 @@
-#!/usr/bin/env python3
-"""
-BYBIT Trading Bot with Telegram Notifications
-- Monitors positions
-- Sends alerts for opens/adds/partial TPs/closes
-- Works with any cryptocurrency pair
-"""
-
 import os
 import asyncio
 import logging
@@ -16,23 +8,40 @@ from telegram.constants import ParseMode
 from dotenv import load_dotenv
 
 # ==========================================
-# SETUP (Don't modify these values directly)
+# NEW: Health Check Setup (Add at the top)
 # ==========================================
+from flask import Flask  # NEW
+app = Flask(__name__)    # NEW
 
-# Load environment variables from .env file
-load_dotenv()
+@app.route('/health')    # NEW
+def health():            # NEW
+    return "OK", 200     # NEW
 
-# Configure logging
+# Run health check in background
+import threading         # NEW
+threading.Thread(        # NEW
+    target=lambda: app.run(host='0.0.0.0', port=5000),  # NEW
+    daemon=True                                         # NEW
+).start()                                               # NEW
+
+# ==========================================
+# NEW: Improved Logging Setup (Replace existing logging)
+# ==========================================
+from logging.handlers import RotatingFileHandler  # NEW
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('logs/bot.log'),
+        RotatingFileHandler(                     # NEW
+            'logs/bot.log',                      # NEW
+            maxBytes=5*1024*1024,  # 5MB per file # NEW
+            backupCount=3          # Keep 3 logs  # NEW
+        ),                                       # NEW
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
-
 # ==========================================
 # BOT CLASS (Main functionality lives here)
 # ==========================================
