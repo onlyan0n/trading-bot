@@ -4,8 +4,10 @@ services:
   trading-bot:
     build: .
     env_file:
-      - config.env
+      - .env  # Now using .env instead of config.env
     restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
     logging:
       driver: "json-file"
       options:
