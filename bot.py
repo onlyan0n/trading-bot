@@ -1,3 +1,27 @@
+#add new script
+import logging
+from dotenv import load_dotenv
+
+# Initialize logging BEFORE anything else
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('logs/bot.log'),
+        logging.StreamHandler()
+    ]
+)
+
+# Load environment variables
+load_dotenv()
+
+# Validate config
+required_vars = ['TELEGRAM_TOKEN', 'BYBIT_API_KEY']
+missing = [var for var in required_vars if not os.getenv(var)]
+if missing:
+    logging.error(f"CRITICAL: Missing env vars: {missing}")
+    exit(1)
+
 import os
 import asyncio
 from datetime import datetime
