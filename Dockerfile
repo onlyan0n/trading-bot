@@ -1,16 +1,21 @@
-# Use official Python image
-FROM python:3.9-slim
-
-# Set working directory
+# Stage 1: Builder
+FROM python:3.9-slim as builder
 WORKDIR /app
-
-# Install dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --user -r requirements.txt
 
-# Copy bot files
-COPY bot.py .
-COPY config.env .
+# Stage 2: Runtime
+FROM python:3.9-slim
+WORKDIR /app
+COPY --from=builder /root/.local /root/.local
+COPY . .
 
-# Run the bot
+# Log persistence
+RUN mkdir -p /app/logs
+VOLUME /app/logs
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s \
+  CMD python -c "import requests; requests.get('http://localhost/health', timeout=5)"
+
 CMD ["python", "-u", "bot.py"]
