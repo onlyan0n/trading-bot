@@ -1,10 +1,18 @@
 #!/bin/bash
 
-# Check if required env vars exist
-if [ -z "$BYBIT_API_KEY" ] || [ -z "$TELEGRAM_TOKEN" ]; then
-  echo "ERROR: Missing required environment variables!"
-  exit 1
-fi
+# Validate environment
+REQUIRED_VARS=(
+  "BYBIT_API_KEY"
+  "TELEGRAM_TOKEN"
+  "TELEGRAM_CHAT_ID"
+)
+
+for var in "${REQUIRED_VARS[@]}"; do
+  if [ -z "${!var}" ]; then
+    echo "ERROR: Missing required environment variable: $var"
+    exit 1
+  fi
+done
 
 # Start the bot
 exec python bot.py
