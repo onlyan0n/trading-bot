@@ -9,7 +9,8 @@ WORKDIR /app
 COPY --from=builder /root/.local /root/.local
 COPY . .
 
-RUN mkdir -p /app/logs
+RUN mkdir -p /app/logs && \
+    chmod a+w /app/logs
 HEALTHCHECK --interval=30s --timeout=3s \
   CMD curl -f http://localhost:5000/health || exit 1
 
