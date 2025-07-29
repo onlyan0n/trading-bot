@@ -1,8 +1,28 @@
-#add new script
+#!/usr/bin/env python3
+"""
+BYBIT Trading Bot with Telegram Notifications
+- Monitors positions
+- Sends alerts for opens/adds/partial TPs/closes
+- Works with any cryptocurrency pair
+"""
+
+import os
+import asyncio
 import logging
+from datetime import datetime
+from pybit.unified_trading import HTTP
+from telegram import Bot
+from telegram.constants import ParseMode
 from dotenv import load_dotenv
 
-# Initialize logging BEFORE anything else
+# ==========================================
+# SETUP (Don't modify these values directly)
+# ==========================================
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -11,205 +31,195 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+logger = logging.getLogger(__name__)
 
-# Load environment variables
-load_dotenv()
+# ==========================================
+# BOT CLASS (Main functionality lives here)
+# ==========================================
 
-# Validate config
-required_vars = ['TELEGRAM_TOKEN', 'BYBIT_API_KEY']
-missing = [var for var in required_vars if not os.getenv(var)]
-if missing:
-    logging.error(f"CRITICAL: Missing env vars: {missing}")
-    exit(1)
-
-import os
-import asyncio
-from datetime import datetime
-from pybit.unified_trading import HTTP
-from telegram import Bot
-from telegram.constants import ParseMode
-
-class PrecisionTradingBot:
+class TradingBot:
     def __init__(self):
-        self.bot = Bot(token=os.getenv("TELEGRAM_TOKEN"))
-        self.session = HTTP(
-            testnet=False,
-            api_key=os.getenv("BYBIT_API_KEY"),
-            api_secret=os.getenv("BYBIT_API_SECRET")
-        )
-        self.position_history = {}
-        self.emoji = {
-            'long': '📈',
-            'short': '📉',
-            'opened': '🟢',
-            'added': '🔵',
-            'reduced': '🟠',
-            'closed': '🔴'
-        }
-
-    async def send_notification(self, symbol: str, message: str):
-        """Send formatted message to Telegram channel"""
-        await self.bot.send_message(
-            chat_id=os.getenv("TELEGRAM_CHAT_ID"),
-            message_thread_id=int(os.getenv("TELEGRAM_TOPIC_ID")),
-            text=message,
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True
-        )
-
-    def _format_number(self, value: float, is_price=False):
-        """Format numbers with proper commas and decimals"""
-        if is_price:
-            return f"{value:,.4f}".rstrip('0').rstrip('.') if '.' in f"{value:,.4f}" else f"{value:,.4f}"
-        return f"{value:,.0f}" if value >= 1000 else f"{value:.2f}"
-
-    async def generate_opened_message(self, symbol: str, data: dict):
-        """Generate message for new position"""
-        side_emoji = self.emoji['long'] if data['side'] == 'Buy' else self.emoji['short']
-        return (
-            f"{self.emoji['opened']} <b>NEW POSITION</b> {side_emoji}\n"
-            f"┣ <b>{symbol}</b> | {data['leverage']}x\n"
-            f"┣ ⏰ {datetime.now().strftime('%d %b %H:%M')}\n"
-            f"┃\n"
-            f"┣ Size: <b>{self._format_number(data['size'])}</b>\n"
-            f"┣ Entry: <b>${self._format_number(data['entry_price'], True)}</b>\n"
-            f"┗ Notional: <b>${self._format_number(data['notional_value'])}</b>"
-        )
-
-    async def generate_added_message(self, symbol: str, data: dict):
-        """Generate message for added position"""
-        side_emoji = self.emoji['long'] if data['side'] == 'Buy' else self.emoji['short']
-        return (
-            f"{self.emoji['added']} <b>POSITION ADDED</b> {side_emoji}\n"
-            f"┣ <b>{symbol}</b> | {data['leverage']}x\n"
-            f"┣ ⏰ {datetime.now().strftime('%d %b %H:%M')}\n"
-            f"┃\n"
-            f"┣ Current Size: <b>{self._format_number(data['current_size'])}</b>\n"
-            f"┣ Added: <b>{self._format_number(data['added_size'])}</b>\n"
-            f"┣ New Avg: <b>${self._format_number(data['new_avg_price'], True)}</b>\n"
-            f"┗ Notional Added: <b>${self._format_number(data['notional_value'])}</b>"
-        )
-
-    async def generate_reduced_message(self, symbol: str, data: dict):
-        """Generate message for reduced position"""
-        side_emoji = self.emoji['long'] if data['side'] == 'Buy' else self.emoji['short']
-        pnl_sign = '+' if data['pnl'] >= 0 else ''
-        return (
-            f"{self.emoji['reduced']} <b>POSITION REDUCED</b> {side_emoji}\n"
-            f"┣ <b>{symbol}</b> | {data['leverage']}x\n"
-            f"┣ ⏰ {datetime.now().strftime('%d %b %H:%M')}\n"
-            f"┃\n"
-            f"┣ Remaining: <b>{self._format_number(data['remaining_size'])}</b>\n"
-            f"┣ Reduced: <b>{self._format_number(data['reduced_size'])}</b>\n"
-            f"┣ Exit Price: <b>${self._format_number(data['exit_price'], True)}</b>\n"
-            f"┣ Avg Entry: <b>${self._format_number(data['avg_entry_price'], True)}</b>\n"
-            f"┣ Notional Removed: <b>${self._format_number(data['notional_value'])}</b>\n"
-            f"┗ PnL: <b>{pnl_sign}${self._format_number(abs(data['pnl']))} ({pnl_sign}{data['pnl_percent']:.1f}%)</b>"
-        )
-
-    def calculate_weighted_avg(self, positions: list):
-        """Calculate weighted average price across multiple entries"""
-        total_qty = sum(float(p['size']) for p in positions)
-        if total_qty == 0:
-            return 0
-        return sum(float(p['size']) * float(p['avgPrice']) for p in positions) / total_qty
-
-    async def monitor_positions(self):
+        """Initialize the bot with API connections"""
         try:
-            # Fetch current positions
-            response = self.session.get_positions(category="linear", settleCoin="USDT")
-            current_positions = {p['symbol']: p for p in response.get('result', {}).get('list', []) if float(p['size']) > 0}
+            # Telegram setup
+            self.bot = Bot(token=os.getenv("TELEGRAM_TOKEN"))
+            self.chat_id = os.getenv("TELEGRAM_CHAT_ID")
+            self.topic_id = int(os.getenv("TELEGRAM_TOPIC_ID"))
+            
+            # Bybit API setup (read-only)
+            self.bybit = HTTP(
+                testnet=False,  # Set to True for testing
+                api_key=os.getenv("BYBIT_API_KEY"),
+                api_secret=os.getenv("BYBIT_API_SECRET")
+            )
+            
+            # Track previous positions
+            self.previous_positions = {}
+            
+            logger.info("Bot initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize bot: {e}")
+            raise
 
-            # Process new openings
+    async def send_telegram_message(self, message: str):
+        """Send message to Telegram with error handling"""
+        try:
+            await self.bot.send_message(
+                chat_id=self.chat_id,
+                message_thread_id=self.topic_id,
+                text=message,
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            logger.error(f"Failed to send Telegram message: {e}")
+
+    def format_usd(self, value: float) -> str:
+        """Format USD values nicely (e.g., $1,234.56)"""
+        return f"${abs(value):,.2f}"
+
+    def format_coin(self, value: float) -> str:
+        """Format coin amounts (e.g., 1,234.56 DOGE)"""
+        return f"{value:,.2f}"
+
+    async def notify_position_opened(self, symbol: str, size: float, entry_price: float, leverage: int):
+        """Send notification when a new position is opened"""
+        notional = size * entry_price
+        message = (
+            "🟢 <b>NEW POSITION OPENED</b>\n"
+            f"┣ <b>{symbol}</b> | {leverage}x\n"
+            f"┣ ⏰ {datetime.now().strftime('%d %b %H:%M')}\n"
+            f"┃\n"
+            f"┣ Size: <b>{self.format_coin(size)}</b>\n"
+            f"┣ Entry: <b>{self.format_usd(entry_price)}</b>\n"
+            f"┗ Notional: <b>{self.format_usd(notional)}</b>"
+        )
+        await self.send_telegram_message(message)
+
+    async def notify_position_added(self, symbol: str, added_size: float, current_size: float, entry_price: float, leverage: int):
+        """Send notification when adding to a position"""
+        added_notional = added_size * entry_price
+        message = (
+            "🔵 <b>POSITION INCREASED</b>\n"
+            f"┣ <b>{symbol}</b> | {leverage}x\n"
+            f"┣ ⏰ {datetime.now().strftime('%d %b %H:%M')}\n"
+            f"┃\n"
+            f"┣ Current Size: <b>{self.format_coin(current_size)}</b>\n"
+            f"┣ Added: <b>{self.format_coin(added_size)}</b>\n"
+            f"┣ Price: <b>{self.format_usd(entry_price)}</b>\n"
+            f"┗ Notional Added: <b>{self.format_usd(added_notional)}</b>"
+        )
+        await self.send_telegram_message(message)
+
+    async def notify_position_reduced(self, symbol: str, reduced_size: float, remaining_size: float, exit_price: float, pnl: float, pnl_percent: float, leverage: int):
+        """Send notification when reducing a position"""
+        pnl_sign = "+" if pnl >= 0 else ""
+        message = (
+            "🟠 <b>POSITION REDUCED</b>\n"
+            f"┣ <b>{symbol}</b> | {leverage}x\n"
+            f"┣ ⏰ {datetime.now().strftime('%d %b %H:%M')}\n"
+            f"┃\n"
+            f"┣ Remaining: <b>{self.format_coin(remaining_size)}</b>\n"
+            f"┣ Reduced: <b>{self.format_coin(reduced_size)}</b>\n"
+            f"┣ Exit Price: <b>{self.format_usd(exit_price)}</b>\n"
+            f"┣ PnL: <b>{pnl_sign}{self.format_usd(pnl)} ({pnl_sign}{abs(pnl_percent):.1f}%)</b>\n"
+            f"┗ Notional Removed: <b>{self.format_usd(reduced_size * exit_price)}</b>"
+        )
+        await self.send_telegram_message(message)
+
+    async def check_positions(self):
+        """Check for position changes and send notifications"""
+        try:
+            # Get current positions from Bybit
+            positions = self.bybit.get_positions(
+                category="linear",
+                settleCoin="USDT"
+            ).get('result', {}).get('list', [])
+            
+            current_positions = {p['symbol']: p for p in positions if float(p['size']) > 0}
+            
+            # Check for new positions
             for symbol, pos in current_positions.items():
-                if symbol not in self.position_history:
-                    size = float(pos['size'])
-                    entry = float(pos['avgPrice'])
-                    await self.send_notification(
-                        symbol,
-                        await self.generate_opened_message(symbol, {
-                            'side': 'Buy' if pos['positionIdx'] == 1 else 'Short',
-                            'leverage': pos['leverage'],
-                            'size': size,
-                            'entry_price': entry,
-                            'notional_value': size * entry
-                        })
+                if symbol not in self.previous_positions:
+                    await self.notify_position_opened(
+                        symbol=symbol,
+                        size=float(pos['size']),
+                        entry_price=float(pos['avgPrice']),
+                        leverage=int(pos['leverage'])
                     )
-
-            # Process modifications
+            
+            # Check for position changes
             for symbol, pos in current_positions.items():
-                if symbol in self.position_history:
-                    prev = self.position_history[symbol]
+                if symbol in self.previous_positions:
+                    prev = self.previous_positions[symbol]
                     current_size = float(pos['size'])
                     prev_size = float(prev['size'])
-
+                    
                     # Position increased
                     if current_size > prev_size:
-                        added_size = current_size - prev_size
-                        new_avg = self.calculate_weighted_avg([prev, pos])
-                        await self.send_notification(
-                            symbol,
-                            await self.generate_added_message(symbol, {
-                                'side': 'Buy' if pos['positionIdx'] == 1 else 'Short',
-                                'leverage': pos['leverage'],
-                                'current_size': current_size,
-                                'added_size': added_size,
-                                'new_avg_price': new_avg,
-                                'notional_value': added_size * float(pos['avgPrice'])
-                            })
+                        await self.notify_position_added(
+                            symbol=symbol,
+                            added_size=current_size - prev_size,
+                            current_size=current_size,
+                            entry_price=float(pos['avgPrice']),
+                            leverage=int(pos['leverage'])
                         )
-
+                    
                     # Position decreased
                     elif current_size < prev_size:
-                        reduced_size = prev_size - current_size
                         pnl = float(pos['unrealisedPnl'])
                         pnl_percent = (pnl / (prev_size * float(prev['avgPrice']))) * 100
-                        await self.send_notification(
-                            symbol,
-                            await self.generate_reduced_message(symbol, {
-                                'side': 'Buy' if pos['positionIdx'] == 1 else 'Short',
-                                'leverage': pos['leverage'],
-                                'remaining_size': current_size,
-                                'reduced_size': reduced_size,
-                                'exit_price': float(pos['avgPrice']),
-                                'avg_entry_price': float(prev['avgPrice']),
-                                'notional_value': reduced_size * float(prev['avgPrice']),
-                                'pnl': pnl,
-                                'pnl_percent': pnl_percent
-                            })
+                        await self.notify_position_reduced(
+                            symbol=symbol,
+                            reduced_size=prev_size - current_size,
+                            remaining_size=current_size,
+                            exit_price=float(pos['avgPrice']),
+                            pnl=pnl,
+                            pnl_percent=pnl_percent,
+                            leverage=int(pos['leverage'])
                         )
-
-            # Process full closures
-            for symbol in set(self.position_history.keys()) - set(current_positions.keys()):
-                prev = self.position_history[symbol]
+            
+            # Check for closed positions
+            for symbol in set(self.previous_positions.keys()) - set(current_positions.keys()):
+                prev = self.previous_positions[symbol]
                 pnl = float(prev['unrealisedPnl'])
                 pnl_percent = (pnl / (float(prev['size']) * float(prev['avgPrice']))) * 100
-                await self.send_notification(
-                    symbol,
-                    await self.generate_reduced_message(symbol, {
-                        'side': 'Buy' if prev['positionIdx'] == 1 else 'Short',
-                        'leverage': prev['leverage'],
-                        'remaining_size': 0,
-                        'reduced_size': float(prev['size']),
-                        'exit_price': float(prev['avgPrice']),
-                        'avg_entry_price': float(prev['avgPrice']),
-                        'notional_value': float(prev['size']) * float(prev['avgPrice']),
-                        'pnl': pnl,
-                        'pnl_percent': pnl_percent
-                    })
+                await self.notify_position_reduced(
+                    symbol=symbol,
+                    reduced_size=float(prev['size']),
+                    remaining_size=0,
+                    exit_price=float(prev['avgPrice']),
+                    pnl=pnl,
+                    pnl_percent=pnl_percent,
+                    leverage=int(prev['leverage'])
                 )
-
-            self.position_history = current_positions
-
+            
+            # Update previous positions
+            self.previous_positions = current_positions
+            
         except Exception as e:
-            print(f"Monitoring error: {e}")
+            logger.error(f"Error checking positions: {e}")
 
     async def run(self):
-        """Main execution loop with precise timing"""
+        """Main bot loop"""
+        logger.info("Starting trading bot...")
         while True:
-            await self.monitor_positions()
-            await asyncio.sleep(10)  # More frequent checks for better accuracy
+            try:
+                await self.check_positions()
+                await asyncio.sleep(15)  # Check every 15 seconds
+            except Exception as e:
+                logger.error(f"Bot error: {e}")
+                await asyncio.sleep(60)  # Wait longer if error occurs
+
+# ==========================================
+# START THE BOT (This runs when you execute the file)
+# ==========================================
 
 if __name__ == "__main__":
-    bot = PrecisionTradingBot()
-    asyncio.run(bot.run())
+    try:
+        bot = TradingBot()
+        asyncio.run(bot.run())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
