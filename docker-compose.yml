@@ -1,3 +1,4 @@
+# docker-compose.yml
 version: '3.8'
 
 services:
@@ -9,13 +10,9 @@ services:
     volumes:
       - ./logs:/app/logs
     ports:
-      - "5000:5000"  # For health checks
+      - "5000:5000"
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
-
-networks:
-  default:
-    driver: bridge
